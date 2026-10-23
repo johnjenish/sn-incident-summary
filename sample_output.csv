@@ -1,4 +1,4 @@
-number,short_description,priority,priority_label,state,state_label,assigned_to,sys_id
-INC0010001,Fictional email outage,1,Critical,1,New,,00000000000000000000000000000001
-INC0010002,Fictional laptop issue,2,High,2,In Progress,00000000000000000000000000000010,00000000000000000000000000000002
-INC0010003,Fictional printer issue,3,Normal,3,On Hold,,00000000000000000000000000000003
+priority,state,count
+P1 (Critical),New,2
+P1 (Critical),In Progress,3
+P2 (High),On Hold,1

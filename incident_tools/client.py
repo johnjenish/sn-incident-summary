@@ -69,15 +69,26 @@ class ServiceNowClient:
         return self._validate_records(self._incident_page(query, limit, 0))
 
     def get_all_incidents(
-        self, query: str = OPEN_INCIDENTS_QUERY, page_size: int = 100
+        self,
+        query: str = OPEN_INCIDENTS_QUERY,
+        page_size: int = 100,
+        *,
+        limit: int | None = None,
     ) -> list[IncidentModel]:
-        """Read every page so the report isn't limited to the first five records."""
+        """Read pages until exhausted or the optional total limit is reached."""
+        if limit is not None and limit < 1:
+            raise ValueError("limit must be at least 1.")
+        if not 1 <= page_size <= 1000:
+            raise ValueError("Page size must be between 1 and 1000.")
         incidents = []
         offset = 0
         while True:
-            response = self._incident_page(query, page_size, offset)
+            request_size = page_size if limit is None else min(page_size, limit - len(incidents))
+            response = self._incident_page(query, request_size, offset)
             page = self._validate_records(response)
-            incidents.extend(page)
+            incidents.extend(page if limit is None else page[:limit - len(incidents)])
+            if limit is not None and len(incidents) >= limit:
+                break
             next_link = response.links.get("next")
             if next_link:
                 # Use only the next offset, never send credentials to a link's host.
@@ -89,9 +100,9 @@ class ServiceNowClient:
                 if next_offset <= offset:
                     raise ValueError("ServiceNow pagination did not advance.")
                 offset = next_offset
-            elif len(page) == page_size:
+            elif len(page) == request_size:
                 # Also handle servers that omit pagination headers.
-                offset += page_size
+                offset += request_size
             else:
                 break
         return incidents

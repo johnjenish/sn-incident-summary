@@ -2,11 +2,12 @@
 
 from .client import ServiceNowClient
 from .labels import priority_label, state_label
-from .models import AssigneeReference, IncidentModel
+from .models import AssigneeReference, IncidentModel, IncidentState
 
 __all__ = [
     "AssigneeReference",
     "IncidentModel",
+    "IncidentState",
     "ServiceNowClient",
     "priority_label",
     "state_label",

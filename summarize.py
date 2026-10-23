@@ -1,8 +1,9 @@
-"""Fetch active incidents, export a CSV, and print counts by priority and state."""
+"""Fetch incidents, export a CSV, and count priorities, states, and their combinations."""
 
 import argparse
 from collections import Counter
 import csv
+from datetime import date
 import os
 from pathlib import Path
 import sys
@@ -13,7 +14,6 @@ import requests
 import truststore
 
 from incident_tools import (
-    AssigneeReference,
     IncidentModel,
     ServiceNowClient,
     priority_label,
@@ -23,10 +23,7 @@ from incident_tools.client import OPEN_INCIDENTS_QUERY
 
 
 ROOT = Path(__file__).resolve().parent
-CSV_FIELDS = [
-    "number", "short_description", "priority", "priority_label",
-    "state", "state_label", "assigned_to", "sys_id",
-]
+CSV_FIELDS = ["priority", "state", "count"]
 
 
 def load_settings() -> tuple[str, str, str]:
@@ -45,45 +42,70 @@ def load_settings() -> tuple[str, str, str]:
     return instance, user, password
 
 
+def summary_rows(incidents: list[IncidentModel]) -> list[dict[str, str | int]]:
+    # Tuple keys keep each priority/state combination separate.
+    counts = Counter((item.priority, item.state) for item in incidents)
+    return [
+        {
+            "priority": f"P{priority} ({priority_label(priority)})",
+            "state": state_label(state),
+            "count": count,
+        }
+        for (priority, state), count in sorted(counts.items())
+    ]
+
+
 def write_csv(incidents: list[IncidentModel], destination: Path) -> None:
+    rows = summary_rows(incidents)
+    if not rows:
+        return
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=CSV_FIELDS)
         writer.writeheader()
-        for incident in incidents:
-            assignee = incident.assigned_to
-            if isinstance(assignee, AssigneeReference):
-                assignee = assignee.display_value or assignee.value
-            writer.writerow({
-                "number": incident.number,
-                "short_description": incident.short_description,
-                "priority": incident.priority,
-                "priority_label": priority_label(incident.priority),
-                "state": incident.state,
-                "state_label": state_label(incident.state),
-                "assigned_to": assignee or "",
-                "sys_id": incident.sys_id or "",
-            })
+        writer.writerows(rows)
 
 
 def print_summary(incidents: list[IncidentModel], destination: Path) -> None:
-    print(f"Incidents retrieved: {len(incidents)}")
-    print("\nBy priority:")
-    for priority, count in sorted(Counter(item.priority for item in incidents).items()):
-        print(f"  P{priority} ({priority_label(priority)}): {count}")
-    print("\nBy state:")
-    counts = Counter(item.state for item in incidents)
-    for state, count in sorted(counts.items(), key=lambda pair: str(pair[0])):
-        print(f"  {state_label(state)} [{state}]: {count}")
+    if not incidents:
+        print("No incidents matched the query. Total: 0. No CSV was written.")
+        return
+
+    priority_counts = Counter(item.priority for item in incidents)
+    state_counts = Counter(item.state for item in incidents)
+
+    print(f"{'Priority':<16} {'State':<14} {'Count':>6}")
+    print("-" * 38)
+    for row in summary_rows(incidents):
+        print(f"{row['priority']:<16} {row['state']:<14} {row['count']:>6}")
+    print("-" * 38)
+    print(f"{'Total':<31} {len(incidents):>6}")
+    print("\nBy priority: " + " | ".join(
+        f"P{priority} ({priority_label(priority)}): {count}"
+        for priority, count in sorted(priority_counts.items())
+    ))
+    print("By state: " + " | ".join(
+        f"{state_label(state)}: {count}" for state, count in sorted(state_counts.items())
+    ))
     print(f"\nCSV: {destination}")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument("--limit", type=int, default=100, help="maximum total incidents to retrieve")
     parser.add_argument("--query", default=OPEN_INCIDENTS_QUERY, help="ServiceNow encoded query")
-    parser.add_argument("--output", type=Path, default=ROOT / "output" / "incidents.csv")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=ROOT / "output" / f"summary_{date.today().isoformat()}.csv",
+        help="destination CSV path",
+    )
     parser.add_argument("--page-size", type=int, default=100, help="records per API request (1–1000)")
     args = parser.parse_args()
+    if args.limit < 1:
+        parser.error("--limit must be at least 1")
     if not 1 <= args.page_size <= 1000:
         parser.error("--page-size must be between 1 and 1000")
 
@@ -94,8 +116,8 @@ def main() -> int:
             session.auth = (user, password)
             session.headers.update({"Accept": "application/json"})
             client = ServiceNowClient(instance, session)
-            incidents = client.get_all_incidents(args.query, args.page_size)
-        # Fetch and validate all records before writing the report.
+            incidents = client.get_all_incidents(args.query, args.page_size, limit=args.limit)
+        # Fetch and validate the selected records before writing the report.
         write_csv(incidents, args.output)
         print_summary(incidents, args.output)
         return 0
